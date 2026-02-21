@@ -1,343 +1,307 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { notFound } from 'next/navigation';
-import Image from 'next/image';
-import { Play, Star, Calendar, Clock, Heart, Share2, Plus } from 'lucide-react';
-import { motion } from 'framer-motion';
-import VideoPlayer from '@/components/VideoPlayer';
-import { fetchMovieDetails, fetchMovieCredits, fetchSimilarMovies } from '@/lib/tmdb';
+import { useState, useEffect, useRef } from 'react';
+import { X, Maximize, Volume2, VolumeX, Play, Pause, Settings, RefreshCw } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/lib/store';
-import MovieCard from '@/components/MovieCard';
 import toast from 'react-hot-toast';
 
-interface PageProps {
-  params: {
-    id: string;
-  };
+interface VideoPlayerProps {
+  movieId?: number;
+  tvId?: number;
+  season?: number;
+  episode?: number;
+  title: string;
+  onClose: () => void;
 }
 
-export default function MoviePage({ params }: PageProps) {
-  const [movie, setMovie] = useState<any>(null);
-  const [credits, setCredits] = useState<any>(null);
-  const [similar, setSimilar] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showPlayer, setShowPlayer] = useState(false);
+// Video source providers in priority order
+const VIDEO_SOURCES = [
+  {
+    name: 'VidSrc',
+    getUrl: (type: 'movie' | 'tv', id: number, season?: number, episode?: number) => {
+      if (type === 'movie') {
+        return `https://vidsrc.xyz/embed/movie/${id}`;
+      }
+      return `https://vidsrc.xyz/embed/tv/${id}/${season}/${episode}`;
+    },
+  },
+  {
+    name: '2Embed',
+    getUrl: (type: 'movie' | 'tv', id: number, season?: number, episode?: number) => {
+      if (type === 'movie') {
+        return `https://www.2embed.cc/embed/${id}`;
+      }
+      return `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}`;
+    },
+  },
+  {
+    name: 'VidSrc.me',
+    getUrl: (type: 'movie' | 'tv', id: number, season?: number, episode?: number) => {
+      if (type === 'movie') {
+        return `https://vidsrc.me/embed/movie?tmdb=${id}`;
+      }
+      return `https://vidsrc.me/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`;
+    },
+  },
+  {
+    name: 'AutoEmbed',
+    getUrl: (type: 'movie' | 'tv', id: number, season?: number, episode?: number) => {
+      if (type === 'movie') {
+        return `https://autoembed.co/movie/tmdb/${id}`;
+      }
+      return `https://autoembed.co/tv/tmdb/${id}-${season}-${episode}`;
+    },
+  },
+];
+
+export default function VideoPlayer({
+  movieId,
+  tvId,
+  season,
+  episode,
+  title,
+  onClose,
+}: VideoPlayerProps) {
+  const [currentSourceIndex, setCurrentSourceIndex] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const controlsTimeoutRef = useRef<NodeJS.Timeout>();
   
-  const addToWatchlist = useAppStore((state) => state.addToWatchlist);
-  const addToFavorites = useAppStore((state) => state.addToFavorites);
-  const watchlist = useAppStore((state) => state.watchlist);
-  const favorites = useAppStore((state) => state.favorites);
+  const updateWatchProgress = useAppStore((state) => state.updateWatchProgress);
+  const preferences = useAppStore((state) => state.preferences);
   
-  const isInWatchlist = watchlist.some((item) => item.id === parseInt(params.id));
-  const isInFavorites = favorites.some((item) => item.id === parseInt(params.id));
+  const type: 'movie' | 'tv' = movieId ? 'movie' : 'tv';
+  const id = movieId || tvId || 0;
+  const currentSource = VIDEO_SOURCES[currentSourceIndex];
+  const videoUrl = currentSource.getUrl(type, id, season, episode);
   
+  // Auto-hide controls
   useEffect(() => {
-    async function loadMovie() {
-      try {
-        const [movieData, creditsData, similarData] = await Promise.all([
-          fetchMovieDetails(parseInt(params.id)),
-          fetchMovieCredits(parseInt(params.id)),
-          fetchSimilarMovies(parseInt(params.id)),
-        ]);
-        
-        setMovie(movieData);
-        setCredits(creditsData);
-        setSimilar(similarData.results.slice(0, 12));
-      } catch (error) {
-        console.error('Error loading movie:', error);
-        notFound();
-      } finally {
-        setLoading(false);
+    const handleMouseMove = () => {
+      setShowControls(true);
+      
+      if (controlsTimeoutRef.current) {
+        clearTimeout(controlsTimeoutRef.current);
+      }
+      
+      controlsTimeoutRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, 3000);
+    };
+    
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      if (controlsTimeoutRef.current) {
+        clearTimeout(controlsTimeoutRef.current);
+      }
+    };
+  }, []);
+  
+  // Track watch progress
+  useEffect(() => {
+    const interval = setInterval(() => {
+      updateWatchProgress({
+        id,
+        type,
+        progress: 0,
+        duration: 0,
+        lastWatched: new Date().toISOString(),
+      });
+    }, 60000);
+    
+    return () => clearInterval(interval);
+  }, [id, type, updateWatchProgress]);
+  
+  // Handle iframe load
+  const handleIframeLoad = () => {
+    setIsLoading(false);
+    setError(false);
+  };
+  
+  // Handle iframe error
+  const handleIframeError = () => {
+    setIsLoading(false);
+    setError(true);
+    toast.error(`${currentSource.name} failed to load`, {
+      icon: '⚠️',
+    });
+  };
+  
+  // Try next source
+  const tryNextSource = () => {
+    if (currentSourceIndex < VIDEO_SOURCES.length - 1) {
+      setCurrentSourceIndex(currentSourceIndex + 1);
+      setIsLoading(true);
+      setError(false);
+      toast.loading(`Trying ${VIDEO_SOURCES[currentSourceIndex + 1].name}...`, {
+        duration: 2000,
+      });
+    } else {
+      toast.error('All video sources failed. Please try again later.', {
+        icon: '❌',
+      });
+    }
+  };
+  
+  // Fullscreen
+  const toggleFullscreen = () => {
+    if (iframeRef.current) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        iframeRef.current.requestFullscreen();
       }
     }
+  };
+  
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      switch (e.key) {
+        case 'Escape':
+          if (document.fullscreenElement) {
+            document.exitFullscreen();
+          } else {
+            onClose();
+          }
+          break;
+        case 'f':
+        case 'F':
+          toggleFullscreen();
+          break;
+      }
+    };
     
-    loadMovie();
-  }, [params.id]);
-  
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="loading-spinner" />
-      </div>
-    );
-  }
-  
-  if (!movie) {
-    notFound();
-  }
-  
-  const handleAddToWatchlist = () => {
-    addToWatchlist({
-      id: movie.id,
-      type: 'movie',
-      title: movie.title,
-      posterPath: movie.poster_path,
-      releaseDate: movie.release_date,
-      rating: movie.vote_average,
-    });
-    toast.success('Added to watchlist!', {
-      icon: '📺',
-    });
-  };
-  
-  const handleAddToFavorites = () => {
-    addToFavorites({
-      id: movie.id,
-      type: 'movie',
-      title: movie.title,
-      posterPath: movie.poster_path,
-      releaseDate: movie.release_date,
-      rating: movie.vote_average,
-    });
-    toast.success('Added to favorites!', {
-      icon: '❤️',
-    });
-  };
-  
-  const handleShare = async () => {
-    try {
-      await navigator.share({
-        title: movie.title,
-        text: `Check out ${movie.title}!`,
-        url: window.location.href,
-      });
-    } catch (error) {
-      // Fallback to copying link
-      navigator.clipboard.writeText(window.location.href);
-      toast.success('Link copied to clipboard!');
-    }
-  };
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [onClose]);
   
   return (
-    <>
-      {/* Video Player */}
-      {showPlayer && (
-        <VideoPlayer
-          movieId={movie.id}
-          title={movie.title}
-          onClose={() => setShowPlayer(false)}
-        />
-      )}
-      
-      {/* Hero Section */}
-      <div className="relative min-h-[70vh] flex items-end">
-        {/* Backdrop */}
-        <div className="absolute inset-0">
-          {movie.backdrop_path && (
-            <Image
-              src={`https://image.tmdb.org/t/p/original${movie.backdrop_path}`}
-              alt={movie.title}
-              fill
-              className="object-cover"
-              priority
-            />
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[100] bg-black flex items-center justify-center"
+      >
+        {/* Video Container */}
+        <div className="relative w-full h-full">
+          {/* Loading State */}
+          {isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black">
+              <div className="text-center space-y-4">
+                <div className="loading-spinner mx-auto" />
+                <p className="text-white text-lg">Loading {currentSource.name}...</p>
+              </div>
+            </div>
           )}
-          <div className="absolute inset-0 bg-gradient-to-t from-tareq-dark via-tareq-dark/80 to-transparent" />
-        </div>
-        
-        {/* Content */}
-        <div className="relative container mx-auto px-4 py-12 z-10">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="max-w-4xl"
-          >
-            <h1 className="text-4xl md:text-6xl font-bold text-white mb-4">
-              {movie.title}
-            </h1>
-            
-            {movie.tagline && (
-              <p className="text-xl text-white/80 italic mb-6">{movie.tagline}</p>
-            )}
-            
-            {/* Meta Info */}
-            <div className="flex flex-wrap items-center gap-4 mb-6">
-              <div className="flex items-center gap-2">
-                <Star className="w-5 h-5 text-tareq-gold fill-tareq-gold" />
-                <span className="text-white font-semibold">
-                  {movie.vote_average.toFixed(1)}
-                </span>
-              </div>
-              
-              <div className="flex items-center gap-2 text-white/80">
-                <Calendar className="w-5 h-5" />
-                <span>{new Date(movie.release_date).getFullYear()}</span>
-              </div>
-              
-              <div className="flex items-center gap-2 text-white/80">
-                <Clock className="w-5 h-5" />
-                <span>{movie.runtime} min</span>
-              </div>
-              
-              {movie.genres && (
-                <div className="flex gap-2">
-                  {movie.genres.slice(0, 3).map((genre: any) => (
-                    <span
-                      key={genre.id}
-                      className="px-3 py-1 bg-white/10 rounded-full text-sm text-white"
-                    >
-                      {genre.name}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-            
-            {/* Action Buttons */}
-            <div className="flex flex-wrap gap-4">
-              <button
-                onClick={() => setShowPlayer(true)}
-                className="btn-primary flex items-center gap-2"
-              >
-                <Play className="w-5 h-5" />
-                Watch Now
-              </button>
-              
-              <button
-                onClick={handleAddToWatchlist}
-                disabled={isInWatchlist}
-                className={`btn-secondary flex items-center gap-2 ${
-                  isInWatchlist ? 'opacity-50 cursor-not-allowed' : ''
-                }`}
-              >
-                <Plus className="w-5 h-5" />
-                {isInWatchlist ? 'In Watchlist' : 'Add to Watchlist'}
-              </button>
-              
-              <button
-                onClick={handleAddToFavorites}
-                disabled={isInFavorites}
-                className={`btn-secondary flex items-center gap-2 ${
-                  isInFavorites ? 'opacity-50 cursor-not-allowed' : ''
-                }`}
-              >
-                <Heart
-                  className={`w-5 h-5 ${
-                    isInFavorites ? 'fill-tareq-gold text-tareq-gold' : ''
-                  }`}
-                />
-                {isInFavorites ? 'Favorited' : 'Add to Favorites'}
-              </button>
-              
-              <button
-                onClick={handleShare}
-                className="btn-secondary flex items-center gap-2"
-              >
-                <Share2 className="w-5 h-5" />
-                Share
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      </div>
-      
-      {/* Movie Details */}
-      <div className="container mx-auto px-4 py-12">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
-          {/* Main Content */}
-          <div className="lg:col-span-2 space-y-8">
-            {/* Overview */}
-            <section>
-              <h2 className="text-2xl font-bold text-white mb-4">Overview</h2>
-              <p className="text-white/80 text-lg leading-relaxed">
-                {movie.overview}
-              </p>
-            </section>
-            
-            {/* Cast */}
-            {credits?.cast && credits.cast.length > 0 && (
-              <section>
-                <h2 className="text-2xl font-bold text-white mb-6">Cast</h2>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                  {credits.cast.slice(0, 8).map((person: any) => (
-                    <div key={person.id} className="text-center">
-                      <div className="relative aspect-[2/3] rounded-lg overflow-hidden mb-2">
-                        {person.profile_path ? (
-                          <Image
-                            src={`https://image.tmdb.org/t/p/w185${person.profile_path}`}
-                            alt={person.name}
-                            fill
-                            className="object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full bg-white/10 flex items-center justify-center">
-                            <span className="text-white/40 text-4xl">👤</span>
-                          </div>
-                        )}
-                      </div>
-                      <p className="text-white font-medium text-sm">{person.name}</p>
-                      <p className="text-white/60 text-xs">{person.character}</p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
           
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Poster */}
-            {movie.poster_path && (
-              <div className="relative aspect-[2/3] rounded-lg overflow-hidden">
-                <Image
-                  src={`https://image.tmdb.org/t/p/w500${movie.poster_path}`}
-                  alt={movie.title}
-                  fill
-                  className="object-cover"
-                />
+          {/* Error State */}
+          {error && !isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black">
+              <div className="text-center space-y-4 p-8">
+                <RefreshCw className="w-16 h-16 text-tareq-gold mx-auto" />
+                <h3 className="text-white text-xl font-semibold">Video failed to load</h3>
+                <p className="text-white/60">
+                  {currentSource.name} couldn't load this video
+                </p>
+                {currentSourceIndex < VIDEO_SOURCES.length - 1 ? (
+                  <button
+                    onClick={tryNextSource}
+                    className="btn-primary"
+                  >
+                    Try {VIDEO_SOURCES[currentSourceIndex + 1].name}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setCurrentSourceIndex(0)}
+                    className="btn-primary"
+                  >
+                    Start Over
+                  </button>
+                )}
               </div>
+            </div>
+          )}
+          
+          {/* Video Iframe */}
+          <iframe
+            ref={iframeRef}
+            src={videoUrl}
+            className="w-full h-full"
+            allowFullScreen
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            onLoad={handleIframeLoad}
+            onError={handleIframeError}
+          />
+          
+          {/* Controls Overlay */}
+          <AnimatePresence>
+            {showControls && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/80 pointer-events-none"
+              >
+                {/* Top Bar */}
+                <div className="absolute top-0 left-0 right-0 p-6 flex items-center justify-between pointer-events-auto">
+                  <div>
+                    <h2 className="text-white text-xl md:text-2xl font-bold drop-shadow-lg">
+                      {title}
+                    </h2>
+                    {tvId && season && episode && (
+                      <p className="text-white/80 text-sm mt-1">
+                        Season {season} • Episode {episode}
+                      </p>
+                    )}
+                  </div>
+                  
+                  <button
+                    onClick={onClose}
+                    className="p-2 rounded-full bg-black/50 hover:bg-black/70 transition-all"
+                  >
+                    <X className="w-6 h-6 text-white" />
+                  </button>
+                </div>
+                
+                {/* Bottom Bar */}
+                <div className="absolute bottom-0 left-0 right-0 p-6 pointer-events-auto">
+                  <div className="flex items-center justify-between">
+                    {/* Source Info */}
+                    <div className="flex items-center gap-4">
+                      <span className="text-white/80 text-sm">
+                        Source: <span className="text-tareq-gold font-medium">{currentSource.name}</span>
+                      </span>
+                      
+                      {currentSourceIndex < VIDEO_SOURCES.length - 1 && (
+                        <button
+                          onClick={tryNextSource}
+                          className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded-full text-white transition-all"
+                        >
+                          Switch Source
+                        </button>
+                      )}
+                    </div>
+                    
+                    {/* Controls */}
+                    <button
+                      onClick={toggleFullscreen}
+                      className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-all"
+                    >
+                      <Maximize className="w-5 h-5 text-white" />
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
             )}
-            
-            {/* Additional Info */}
-            <div className="bg-white/5 rounded-lg p-6 space-y-4">
-              <div>
-                <h3 className="text-white/60 text-sm mb-1">Status</h3>
-                <p className="text-white">{movie.status}</p>
-              </div>
-              
-              {movie.budget > 0 && (
-                <div>
-                  <h3 className="text-white/60 text-sm mb-1">Budget</h3>
-                  <p className="text-white">
-                    ${movie.budget.toLocaleString()}
-                  </p>
-                </div>
-              )}
-              
-              {movie.revenue > 0 && (
-                <div>
-                  <h3 className="text-white/60 text-sm mb-1">Revenue</h3>
-                  <p className="text-white">
-                    ${movie.revenue.toLocaleString()}
-                  </p>
-                </div>
-              )}
-              
-              {movie.production_companies && movie.production_companies.length > 0 && (
-                <div>
-                  <h3 className="text-white/60 text-sm mb-1">Production</h3>
-                  <p className="text-white">
-                    {movie.production_companies.map((c: any) => c.name).join(', ')}
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
+          </AnimatePresence>
         </div>
-        
-        {/* Similar Movies */}
-        {similar.length > 0 && (
-          <section className="mt-12">
-            <h2 className="text-2xl font-bold text-white mb-6">Similar Movies</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-6">
-              {similar.map((movie) => (
-                <MovieCard key={movie.id} movie={movie} />
-              ))}
-            </div>
-          </section>
-        )}
-      </div>
-    </>
+      </motion.div>
+    </AnimatePresence>
   );
 }
