@@ -9,7 +9,6 @@ import VideoPlayer from '@/components/VideoPlayer';
 import { fetchMovieDetails, fetchMovieCredits, fetchSimilarMovies } from '@/lib/tmdb';
 import { useAppStore } from '@/lib/store';
 import MovieCard from '@/components/MovieCard';
-import PersonCard from '@/components/PersonCard';
 import toast from 'react-hot-toast';
 
 interface PageProps {
@@ -252,7 +251,24 @@ export default function MoviePage({ params }: PageProps) {
                 <h2 className="text-2xl font-bold text-white mb-6">Cast</h2>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
                   {credits.cast.slice(0, 8).map((person: any) => (
-                    <PersonCard key={person.id} person={person} />
+                    <div key={person.id} className="text-center">
+                      <div className="relative aspect-[2/3] rounded-lg overflow-hidden mb-2">
+                        {person.profile_path ? (
+                          <Image
+                            src={`https://image.tmdb.org/t/p/w185${person.profile_path}`}
+                            alt={person.name}
+                            fill
+                            className="object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-white/10 flex items-center justify-center">
+                            <span className="text-white/40 text-4xl">👤</span>
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-white font-medium text-sm">{person.name}</p>
+                      <p className="text-white/60 text-xs">{person.character}</p>
+                    </div>
                   ))}
                 </div>
               </section>
