@@ -1,5 +1,4 @@
 'use client';
-
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/lib/store';
@@ -18,6 +17,7 @@ export default function MoviePage() {
   const { t } = useTranslation(locale);
   const [movie, setMovie] = useState<MovieDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [showPlayer, setShowPlayer] = useState(false);
 
   useEffect(() => {
     const fetchMovie = async () => {
@@ -32,7 +32,6 @@ export default function MoviePage() {
         setIsLoading(false);
       }
     };
-
     if (id) {
       fetchMovie();
     }
@@ -58,13 +57,15 @@ export default function MoviePage() {
     <main className="min-h-screen bg-black">
       <Navbar />
       
-      <div className="pt-20">
+      {showPlayer && (
         <VideoPlayer 
-          tmdbId={movie.id}
+          movieId={movie.id}
           title={movie.title}
-          type="movie"
+          onClose={() => setShowPlayer(false)}
         />
-        
+      )}
+      
+      <div className="pt-20">
         <div className="container mx-auto px-4 py-8">
           <h1 className="text-4xl font-bold text-white mb-4">{movie.title}</h1>
           
@@ -82,6 +83,13 @@ export default function MoviePage() {
               <span>{movie.runtime} {t('minutes')}</span>
             </div>
           </div>
+          
+          <button
+            onClick={() => setShowPlayer(true)}
+            className="mb-6 px-8 py-3 bg-tareq-gold text-black font-bold rounded-lg hover:bg-tareq-gold/90 transition-all"
+          >
+            {t('watchNow') || 'Watch Now'}
+          </button>
           
           <p className="text-gray-300 text-lg mb-6">{movie.overview}</p>
           
